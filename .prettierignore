@@ -47,3 +47,6 @@ bench/nested-deps/components/**/*
 test/lib/amp-validator-wasm.js
 test/production/pages-dir/production/fixture/amp-validator-wasm.js
 test/e2e/async-modules/amp-validator-wasm.js
+
+# TODO: remove this, but it needs https://github.com/prettier/prettier/pull/15718
+packages/next/src/build/templates/app-page.ts
