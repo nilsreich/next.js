@@ -49,7 +49,7 @@ export type PrerenderState = {
   /**
    * When true, stack information will also be tracked during dynamic access.
    */
-  readonly isDebugSkeleton: boolean | undefined
+  readonly isDebugDynamicAccesses: boolean | undefined
 
   /**
    * The dynamic accesses that occurred during the render.
@@ -58,10 +58,10 @@ export type PrerenderState = {
 }
 
 export function createPrerenderState(
-  isDebugSkeleton: boolean | undefined
+  isDebugDynamicAccesses: boolean | undefined
 ): PrerenderState {
   return {
-    isDebugSkeleton,
+    isDebugDynamicAccesses,
     dynamicAccesses: [],
   }
 }
@@ -201,7 +201,9 @@ function postponeWithTracking(
   prerenderState.dynamicAccesses.push({
     // When we aren't debugging, we don't need to create another error for the
     // stack trace.
-    stack: prerenderState.isDebugSkeleton ? new Error().stack : undefined,
+    stack: prerenderState.isDebugDynamicAccesses
+      ? new Error().stack
+      : undefined,
     expression,
   })
 

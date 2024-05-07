@@ -41,7 +41,7 @@ export type StaticGenerationContext = {
     | 'isRevalidate'
     | 'nextExport'
     | 'isDraftMode'
-    | 'isDebugPPRSkeleton'
+    | 'isDebugDynamicAccesses'
   >
 }
 
@@ -78,7 +78,7 @@ export const StaticGenerationAsyncStorageWrapper: AsyncStorageWrapper<
 
     const prerenderState: StaticGenerationStore['prerenderState'] =
       isStaticGeneration && renderOpts.experimental?.isRoutePPREnabled
-        ? createPrerenderState(renderOpts.isDebugPPRSkeleton)
+        ? createPrerenderState(renderOpts.isDebugDynamicAccesses)
         : null
 
     const store: StaticGenerationStore = {
