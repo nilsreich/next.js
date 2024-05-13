@@ -72,16 +72,7 @@ const ScopedCacheDispatcher: CacheDispatcher = {
 
 export function patchCacheScopeSupportIntoReact(React: typeof import('react')) {
   const internals = getReactServerInternals(React)
-  if ('ReactCurrentCache' in internals) {
-    // react < 19
-    const { ReactCurrentCache } = internals
-    if (ReactCurrentCache.current) {
-      patchReactCacheDispatcher(ReactCurrentCache.current)
-    } else {
-      patchReactCacheDispatcherWhenSet(ReactCurrentCache, 'current')
-    }
-  } else if ('A' in internals) {
-    // react >= 19
+  if ('A' in internals) {
     if (internals.A) {
       patchReactCacheDispatcher(internals.A)
     } else {
@@ -118,6 +109,7 @@ function patchReactCacheDispatcherWhenSet<
   if (container[HAS_CACHE_SCOPE]) {
     return
   }
+
   let current: CacheDispatcher | null = null
   Object.defineProperty(container, key, {
     get: () => current,
@@ -141,33 +133,16 @@ function patchReactCacheDispatcherWhenSet<
 type ReactWithServerInternals = typeof import('react') &
   ReactServerInternalProperties
 
-type ReactServerInternalProperties =
-  | {
-      __SECRET_SERVER_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED: ReactServerSharedInternalsOld
-    }
-  | {
-      __SERVER_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: ReactServerSharedInternalsNew
-    }
-
-type ReactServerSharedInternals =
-  | ReactServerSharedInternalsOld
-  | ReactServerSharedInternalsNew
-
-type ReactServerSharedInternalsOld = {
-  ReactCurrentCache: {
-    [HAS_CACHE_SCOPE]?: boolean
-    current: CacheDispatcher | null
-  }
+type ReactServerInternalProperties = {
+  __SERVER_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE: ReactServerSharedInternals
 }
 
-type ReactServerSharedInternalsNew = {
+type ReactServerSharedInternals = {
   [HAS_CACHE_SCOPE]?: boolean
   A: CacheDispatcher | null
 }
 
-const INTERNALS_KEY_OLD =
-  '__SECRET_SERVER_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED'
-const INTERNALS_KEY_NEW =
+const INTERNALS_KEY =
   '__SERVER_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE'
 
 function getReactServerInternals(
@@ -175,11 +150,8 @@ function getReactServerInternals(
 ): ReactServerSharedInternals {
   const _React = React as ReactWithServerInternals
 
-  if (INTERNALS_KEY_OLD in _React) {
-    return _React[INTERNALS_KEY_OLD]
-  }
-  if (INTERNALS_KEY_NEW in _React) {
-    return _React[INTERNALS_KEY_NEW]
+  if (INTERNALS_KEY in _React) {
+    return _React[INTERNALS_KEY]
   }
 
   throw new Error('Invariant: Could not access React server internals')
