@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks'
+import { InvariantError } from '../../shared/lib/invariant-error'
 
 export function createCacheScope() {
   const storage = createCacheMap()
@@ -51,8 +52,8 @@ function resolveCache(): CacheMap {
 const ScopedCacheDispatcher: CacheDispatcher = {
   getCacheForType<T>(resourceType: () => T): T {
     if (!isWithinCacheScope()) {
-      throw new Error(
-        'Invariant: Expected patched cache dispatcher to run within CacheScopeStorage'
+      throw new InvariantError(
+        'Expected patched cache dispatcher to run within CacheScopeStorage'
       )
     }
     const cache = resolveCache()
@@ -79,8 +80,8 @@ export function patchCacheScopeSupportIntoReact(React: typeof import('react')) {
       patchReactCacheDispatcherWhenSet(internals, 'A')
     }
   } else {
-    throw new Error(
-      'Invariant: Could not find cache dispatcher in React internals'
+    throw new InvariantError(
+      'Could not find cache dispatcher in React internals'
     )
   }
 }
@@ -119,10 +120,9 @@ function patchReactCacheDispatcherWhenSet<
           patchReactCacheDispatcher(maybeDispatcher)
         }
       } catch (err) {
-        throw new Error(
-          'Invariant: could not patch the React cache dispatcher',
-          { cause: err }
-        )
+        throw new InvariantError('Could not patch the React cache dispatcher', {
+          cause: err,
+        })
       }
       current = maybeDispatcher
     },
@@ -154,7 +154,7 @@ function getReactServerInternals(
     return _React[INTERNALS_KEY]
   }
 
-  throw new Error('Invariant: Could not access React server internals')
+  throw new InvariantError('Could not access React server internals')
 }
 
 // #endregion

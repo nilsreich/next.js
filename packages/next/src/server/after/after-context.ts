@@ -8,6 +8,7 @@ import type { CacheScope } from './react-cache-scope'
 import { ResponseCookies } from '../web/spec-extension/cookies'
 import type { RequestLifecycleOpts } from '../base-server'
 import type { AfterCallback, AfterTask, WaitUntilFn } from './shared'
+import { InvariantError } from '../../shared/lib/invariant-error'
 
 export interface AfterContext {
   run<T>(requestStore: RequestStore, callback: () => T): T
@@ -74,8 +75,8 @@ export class AfterContextImpl implements AfterContext {
         errorWaitUntilNotAvailable()
       }
       if (!this.requestStore) {
-        throw new Error(
-          'Invariant: expected `AfterContext.requestStore` to be initialized'
+        throw new InvariantError(
+          'Expected `AfterContext.requestStore` to be initialized'
         )
       }
       if (!this.onClose) {
@@ -156,12 +157,12 @@ function wrapRequestStoreForAfterCallbacks(
     afterContext: {
       after: () => {
         throw new Error(
-          'Cannot call `unstable_after()` from within `unstable_after()`'
+          'Calling `unstable_after()` from within `unstable_after()` is currently not supported.'
         )
       },
       run: () => {
-        throw new Error(
-          'Invariant: Cannot call `AfterContext.run()` from within an `unstable_after()` callback'
+        throw new InvariantError(
+          'Cannot call `AfterContext.run()` from within an `unstable_after()` callback'
         )
       },
     },

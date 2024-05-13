@@ -6,6 +6,7 @@ import { BaseNextRequest, BaseNextResponse } from './index'
 import { DetachedPromise } from '../../lib/detached-promise'
 import type { NextRequestHint } from '../web/adapter'
 import { CloseController, trackBodyConsumed } from '../web/web-on-close'
+import { InvariantError } from '../../shared/lib/invariant-error'
 
 export class WebNextRequest extends BaseNextRequest<ReadableStream | null> {
   public request: Request
@@ -132,12 +133,14 @@ export class WebNextResponse extends BaseNextResponse<WritableStream> {
 
   public onClose(callback: () => void) {
     if (!this.trackOnClose) {
-      throw new Error(
+      throw new InvariantError(
         'Cannot call onClose on a WebNextResponse initialized with `trackOnClose = false`'
       )
     }
     if (this.sent) {
-      throw new Error('Cannot call onClose on a response that is already sent')
+      throw new InvariantError(
+        'Cannot call onClose on a response that is already sent'
+      )
     }
     return this.closeController.onClose(callback)
   }
