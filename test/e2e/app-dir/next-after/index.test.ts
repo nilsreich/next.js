@@ -269,7 +269,7 @@ describe('unstable_after()', () => {
         )
         try {
           expect(await session.getRedboxSource(true)).toMatch(
-            /You're importing a component that needs "?next\/server"?\. That only works in a Server Component but one of its parents is marked with "use client", so it's a Client Component\./
+            /You're importing a component that needs "?unstable_after"?\. That only works in a Server Component but one of its parents is marked with "use client", so it's a Client Component\./
           )
           expect(getLogs()).toHaveLength(0)
         } finally {
@@ -300,7 +300,7 @@ describe('unstable_after()', () => {
 
           try {
             expect(await session.getRedboxSource(true)).toMatch(
-              /You're importing a component that needs "?next\/server"?\. That only works in a Server Component which is not supported in the pages\/ directory\./
+              /You're importing a component that needs "?unstable_after"?\. That only works in a Server Component which is not supported in the pages\/ directory\./
             )
             expect(getLogs()).toHaveLength(0)
           } finally {
