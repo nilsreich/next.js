@@ -7,7 +7,6 @@ export function middleware(
 ) {
   const url = new URL(request.url)
   if (url.pathname.startsWith('/middleware/redirect-source')) {
-    console.trace('middleware!')
     const requestId = url.searchParams.get('requestId')
     after(() => {
       cliLog({
