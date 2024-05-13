@@ -45,6 +45,14 @@ describe('createAfterContext', () => {
     after = AfterMod.unstable_after
   })
 
+  const createRun =
+    (afterContext: AfterContext, requestStore: RequestStore) =>
+    <T>(cb: () => T): T => {
+      return afterContext.run(requestStore, () =>
+        requestAsyncStorage.run(requestStore, cb)
+      )
+    }
+
   it('runs after() callbacks from a run() callback that resolves', async () => {
     const waitUntilPromises: Promise<unknown>[] = []
     const waitUntil = jest.fn((promise) => waitUntilPromises.push(promise))
@@ -61,11 +69,7 @@ describe('createAfterContext', () => {
     })
 
     const requestStore = createMockRequestStore(afterContext)
-
-    const run = <T>(cb: () => T): Promise<T> =>
-      requestAsyncStorage.run(requestStore, () =>
-        afterContext.run(requestStore, cb)
-      )
+    const run = createRun(afterContext, requestStore)
 
     // ==================================
 
@@ -85,12 +89,12 @@ describe('createAfterContext', () => {
       await Promise.resolve(null)
 
       after(afterCallback1)
-      expect(waitUntil).toHaveBeenCalledTimes(2) // just the keepAliveLock
+      expect(waitUntil).toHaveBeenCalledTimes(2) // just runCallbacksOnClose
 
       await Promise.resolve(null)
 
       after(afterCallback2)
-      expect(waitUntil).toHaveBeenCalledTimes(2) // only one keepAliveLock should be added for all callbacks
+      expect(waitUntil).toHaveBeenCalledTimes(2) // should only `waitUntil(this.runCallbacksOnClose())` once for all callbacks
     })
 
     expect(onClose).toHaveBeenCalledTimes(1)
@@ -99,17 +103,21 @@ describe('createAfterContext', () => {
 
     // the response is done.
     onCloseCallback!()
+    await Promise.resolve(null)
 
     expect(afterCallback1).toHaveBeenCalledTimes(1)
     expect(afterCallback2).toHaveBeenCalledTimes(1)
-    expect(waitUntil).toHaveBeenCalledTimes(2 + 2)
+    expect(waitUntil).toHaveBeenCalledTimes(2)
 
     promise0.resolve('0')
     promise1.resolve('1')
     promise2.resolve('2')
 
     const results = await Promise.all(waitUntilPromises)
-    expect(results).toEqual(['0', /* lock */ undefined, '1', '2'])
+    expect(results).toEqual([
+      '0', // promises are passed to waitUntil as is
+      undefined, // callbacks all get collected into a big void promise
+    ])
   })
 
   it('runs after() callbacks from a run() callback that throws', async () => {
@@ -129,22 +137,19 @@ describe('createAfterContext', () => {
 
     const requestStore = createMockRequestStore(afterContext)
 
-    const run = <T>(cb: () => T): Promise<T> =>
-      requestAsyncStorage.run(requestStore, () =>
-        afterContext.run(requestStore, cb)
-      )
+    const run = createRun(afterContext, requestStore)
 
     // ==================================
 
     const promise1 = new DetachedPromise<string>()
     const afterCallback1 = jest.fn(() => promise1.promise)
 
-    await run(() => {
+    await run(async () => {
       after(afterCallback1)
       throw new Error('boom!')
     }).catch(() => {})
 
-    // keepAliveLock
+    // runCallbacksOnClose
     expect(waitUntil).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
 
@@ -152,14 +157,15 @@ describe('createAfterContext', () => {
 
     // the response is done.
     onCloseCallback!()
+    await Promise.resolve(null)
 
     expect(afterCallback1).toHaveBeenCalledTimes(1)
-    expect(waitUntil).toHaveBeenCalledTimes(2)
+    expect(waitUntil).toHaveBeenCalledTimes(1)
 
     promise1.resolve('1')
 
     const results = await Promise.all(waitUntilPromises)
-    expect(results).toEqual([/* lock */ undefined, '1'])
+    expect(results).toEqual([undefined])
   })
 
   it('runs after() callbacks from a run() callback that streams', async () => {
@@ -179,10 +185,7 @@ describe('createAfterContext', () => {
 
     const requestStore = createMockRequestStore(afterContext)
 
-    const run = <T>(cb: () => T): Promise<T> =>
-      requestAsyncStorage.run(requestStore, () =>
-        afterContext.run(requestStore, cb)
-      )
+    const run = createRun(afterContext, requestStore)
 
     // ==================================
 
@@ -194,7 +197,7 @@ describe('createAfterContext', () => {
 
     const streamStarted = new DetachedPromise<void>()
 
-    const stream = await run(() => {
+    const stream = run(() => {
       return new ReadableStream<string>({
         async start(controller) {
           await streamStarted.promise // block the stream to start it manually later
@@ -205,12 +208,12 @@ describe('createAfterContext', () => {
           after(afterCallback1)
           controller.enqueue('one')
           await delay()
-          expect(waitUntil).toHaveBeenCalledTimes(1) // keepAliveLock
+          expect(waitUntil).toHaveBeenCalledTimes(1) // runCallbacksOnClose
 
           after(afterCallback2)
           controller.enqueue('two')
           await delay()
-          expect(waitUntil).toHaveBeenCalledTimes(1) // keepAliveLock
+          expect(waitUntil).toHaveBeenCalledTimes(1) // runCallbacksOnClose
 
           await delay()
           controller.close()
@@ -234,7 +237,7 @@ describe('createAfterContext', () => {
       }
     }
 
-    // keepAliveLock
+    // runCallbacksOnClose
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(waitUntil).toHaveBeenCalledTimes(1)
 
@@ -243,19 +246,20 @@ describe('createAfterContext', () => {
 
     // the response is done.
     onCloseCallback!()
+    await Promise.resolve(null)
 
     expect(afterCallback1).toHaveBeenCalledTimes(1)
     expect(afterCallback2).toHaveBeenCalledTimes(1)
-    expect(waitUntil).toHaveBeenCalledTimes(1 + 2)
+    expect(waitUntil).toHaveBeenCalledTimes(1)
 
     promise1.resolve('1')
     promise2.resolve('2')
 
     const results = await Promise.all(waitUntilPromises)
-    expect(results).toEqual([/* lock */ undefined, '1', '2'])
+    expect(results).toEqual([undefined])
   })
 
-  it('releases the lock if onClose failed', async () => {
+  it('does not hang forever if onClose failed', async () => {
     const waitUntilPromises: Promise<unknown>[] = []
     const waitUntil = jest.fn((promise) => waitUntilPromises.push(promise))
 
@@ -271,26 +275,25 @@ describe('createAfterContext', () => {
 
     const requestStore = createMockRequestStore(afterContext)
 
-    const run = <T>(cb: () => T): Promise<T> =>
-      requestAsyncStorage.run(requestStore, () =>
-        afterContext.run(requestStore, cb)
-      )
+    const run = createRun(afterContext, requestStore)
 
     // ==================================
 
     const afterCallback1 = jest.fn()
 
-    await run(() => {
+    await run(async () => {
       after(afterCallback1)
-    }).catch(() => {})
+    })
 
-    expect(waitUntil).toHaveBeenCalledTimes(1) // keepAliveLock
+    expect(waitUntil).toHaveBeenCalledTimes(1) // runCallbacksOnClose
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(afterCallback1).not.toHaveBeenCalled()
 
-    // if the lock didn't get released, this should hang forever, and get killed by jest.
-    const results = await Promise.all(waitUntilPromises)
-    expect(results).toEqual([undefined])
+    // if we didn't properly reject the runCallbacksOnClose promise, this should hang forever, and get killed by jest.
+    const results = await Promise.allSettled(waitUntilPromises)
+    expect(results).toEqual([
+      { status: 'rejected', value: undefined, reason: expect.anything() },
+    ])
   })
 
   it('runs all after() callbacks even if some of them threw', async () => {
@@ -337,21 +340,75 @@ describe('createAfterContext', () => {
 
     // the response is done.
     onCloseCallback!()
+    await Promise.resolve(null)
 
     expect(afterCallback1).toHaveBeenCalledTimes(1)
     expect(afterCallback2).toHaveBeenCalledTimes(1)
     expect(afterCallback3).toHaveBeenCalledTimes(1)
-    expect(waitUntil).toHaveBeenCalledTimes(1 + 2)
+    expect(waitUntil).toHaveBeenCalledTimes(1)
 
     promise1.reject(new Error('1'))
     promise3.resolve('3')
 
     const results = await Promise.all(waitUntilPromises)
-    expect(results).toEqual([
-      /* 0: lock   */ undefined,
-      /* 1: caught */ undefined,
-      /* 2: sync - no promise */
-      /* 3: ok     */ '3',
-    ])
+    expect(results).toEqual([undefined])
+  })
+
+  it('throws from after() if waitUntil is not provided', async () => {
+    const waitUntil = undefined
+    const onClose = jest.fn()
+
+    const afterContext = createAfterContext({
+      waitUntil,
+      onClose,
+      cacheScope: undefined,
+    })
+
+    const requestStore = createMockRequestStore(afterContext)
+
+    const run = createRun(afterContext, requestStore)
+
+    // ==================================
+
+    const afterCallback1 = jest.fn()
+
+    expect(() =>
+      run(() => {
+        after(afterCallback1)
+      })
+    ).toThrow(/`waitUntil` is not implemented for the current environment/)
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(afterCallback1).not.toHaveBeenCalled()
+  })
+
+  it('throws from after() if onClose is not provided', async () => {
+    const waitUntilPromises: Promise<unknown>[] = []
+    const waitUntil = jest.fn((promise) => waitUntilPromises.push(promise))
+
+    const onClose = undefined
+
+    const afterContext = createAfterContext({
+      waitUntil,
+      onClose,
+      cacheScope: undefined,
+    })
+
+    const requestStore = createMockRequestStore(afterContext)
+
+    const run = createRun(afterContext, requestStore)
+
+    // ==================================
+
+    const afterCallback1 = jest.fn()
+
+    expect(() =>
+      run(() => {
+        after(afterCallback1)
+      })
+    ).toThrow(/`onClose` is not implemented for the current environment/)
+
+    expect(waitUntil).not.toHaveBeenCalled()
+    expect(afterCallback1).not.toHaveBeenCalled()
   })
 })

@@ -1,4 +1,3 @@
-import { DetachedPromise } from '../../lib/detached-promise'
 import {
   requestAsyncStorage,
   type RequestStore,
@@ -10,73 +9,51 @@ import { ResponseCookies } from '../web/spec-extension/cookies'
 import type { RequestLifecycleOpts } from '../base-server'
 import type { AfterCallback, AfterTask, WaitUntilFn } from './shared'
 
-// export type AfterContext = {
-//   after: (task: AfterTask) => void
-//   run: <T>(requestStore: RequestStore, callback: () => T) => Promise<T>
-// }
+export interface AfterContext {
+  run<T>(requestStore: RequestStore, callback: () => T): T
+  after(task: AfterTask): void
+}
 
-export function createAfterContext(opts: {
+export type AfterContextOpts = {
   waitUntil: WaitUntilFn | undefined
   onClose: RequestLifecycleOpts['onClose'] | undefined
   cacheScope: CacheScope | undefined
-}): AfterContext {
-  return new AfterContext(opts)
 }
 
-class AfterContext {
-  private waitUntil: WaitUntilFn
-  private onClose: NonNullable<RequestLifecycleOpts['onClose']>
+export function createAfterContext(opts: AfterContextOpts): AfterContext {
+  return new AfterContextImpl(opts)
+}
+
+export class AfterContextImpl implements AfterContext {
+  private waitUntil: WaitUntilFn | undefined
+  private onClose: RequestLifecycleOpts['onClose'] | undefined
   private cacheScope: CacheScope | undefined
 
-  private keepAliveLock: KeepAliveLock
+  private requestStore: RequestStore | undefined
 
   private afterCallbacks: AfterCallback[] = []
-  private firstCallbackAdded = createTrigger()
 
-  constructor({
-    waitUntil: _waitUntil,
-    onClose: _onClose,
-    cacheScope,
-  }: {
-    waitUntil: WaitUntilFn | undefined
-    onClose: RequestLifecycleOpts['onClose'] | undefined
-    cacheScope: CacheScope | undefined
-  }) {
-    this.waitUntil = _waitUntil ?? waitUntilNotAvailable
-    this.onClose = _onClose ?? onCloseNotAvailable
+  constructor({ waitUntil, onClose, cacheScope }: AfterContextOpts) {
+    this.waitUntil = waitUntil
+    this.onClose = onClose
     this.cacheScope = cacheScope
-
-    this.keepAliveLock = createKeepAliveLock(this.waitUntil)
   }
 
-  public async run<T>(requestStore: RequestStore, callback: () => T) {
-    try {
-      if (this.cacheScope) {
-        return await this.cacheScope.run(() => callback())
-      } else {
-        return await callback()
-      }
-    } finally {
-      // NOTE: it's likely that the callback is doing streaming rendering,
-      // which means that nothing actually happened yet,
-      // and we have to wait until the request closes to do anything.
-      // (this also means that this outer try-finally may not catch much).
-
-      // don't await -- it may never resolve if no callbacks are passed.
-      this.onCloseLazy(() => this.runCallbacks(requestStore)).catch(
-        (err: unknown) => {
-          console.error(err)
-          // as a last resort -- if something fails here, something's probably broken really badly,
-          // so make sure we release the lock -- at least we'll avoid hanging a `waitUntil` forever.
-          this.keepAliveLock.release()
-        }
-      )
+  public run<T>(requestStore: RequestStore, callback: () => T): T {
+    this.requestStore = requestStore
+    if (this.cacheScope) {
+      return this.cacheScope.run(() => callback())
+    } else {
+      return callback()
     }
   }
 
   public after(task: AfterTask): void {
     if (isPromise(task)) {
       task.catch(() => {}) // avoid unhandled rejection crashes
+      if (!this.waitUntil) {
+        errorWaitUntilNotAvailable()
+      }
       this.waitUntil(task)
     } else if (typeof task === 'function') {
       // TODO(after): will this trace correctly?
@@ -84,71 +61,58 @@ class AfterContext {
         getTracer().trace(BaseServerSpan.after, () => task())
       )
     } else {
-      throw new Error('after() must receive a promise or a function')
+      throw new Error(
+        '`unstable_after()` must receive a promise or a function as its argument'
+      )
     }
   }
 
   private addCallback(callback: AfterCallback) {
     if (this.afterCallbacks.length === 0) {
-      this.keepAliveLock.acquire()
-      this.firstCallbackAdded.trigger()
+      // if something is wrong, throw synchronously, bubbling up to the `unstable_after` callsite.
+      if (!this.waitUntil) {
+        errorWaitUntilNotAvailable()
+      }
+      if (!this.requestStore) {
+        throw new Error(
+          'Invariant: expected `AfterContext.requestStore` to be initialized'
+        )
+      }
+      if (!this.onClose) {
+        throw new Error(
+          '`unstable_after()` received a function, but Next.js will not be able to run it, because `onClose` is not implemented for the current environment.'
+        )
+      }
+
+      this.waitUntil(this.runCallbacksOnClose())
     }
     this.afterCallbacks.push(callback)
   }
 
-  private onCloseLazy(callback: () => void): Promise<void> {
-    // `onClose` has some overhead in WebNextResponse, so we don't want to call it unless necessary.
-    // we also have to avoid calling it if we're in static generation (because it doesn't exist there).
-    //   (the ordering is a bit convoluted -- in static generation, calling after() will cause a bailout and fail anyway,
-    //    but we can't know that at the point where we call `onClose`.)
-    // this trick means that we'll only ever try to call `onClose` if an `after()` call successfully went through.
-
-    const result = new DetachedPromise<void>()
-    const register = () => {
-      try {
-        this.onClose(callback)
-        result.resolve()
-      } catch (err) {
-        result.reject(err)
-      }
-    }
-
-    if (this.firstCallbackAdded.wasTriggered) {
-      register()
-    } else {
-      // callbacks may be added later (or never, in which case this'll never run)
-      this.firstCallbackAdded.onTrigger(register)
-    }
-    return result.promise
+  private async runCallbacksOnClose() {
+    await new Promise<void>((resolve) => this.onClose!(resolve))
+    return this.runCallbacks(this.requestStore!)
   }
 
-  private runCallbacks(requestStore: RequestStore) {
+  private async runCallbacks(requestStore: RequestStore): Promise<void> {
     if (this.afterCallbacks.length === 0) return
 
-    const runCallbacksImpl = () => {
-      while (this.afterCallbacks.length) {
-        const afterCallback = this.afterCallbacks.shift()!
-
-        const onError = (err: unknown) => {
-          // TODO(after): how do we properly report errors here?
-          console.error(
-            'An error occurred in a function passed to `unstable_after()`:',
-            err
-          )
-        }
-
-        // try-catch in case the callback throws synchronously or does not return a promise.
-        try {
-          const ret = afterCallback()
-          if (isPromise(ret)) {
-            this.waitUntil(ret.catch(onError))
+    const runCallbacksImpl = async () => {
+      // TODO(after): we should consider limiting the parallelism here via something like `p-queue`.
+      // (having a queue will also be needed for after-within-after, so this'd solve two problems at once).
+      await Promise.all(
+        this.afterCallbacks.map(async (afterCallback) => {
+          try {
+            await afterCallback()
+          } catch (err) {
+            // TODO(after): this is fine for now, but will need better intergration with our error reporting.
+            console.error(
+              'An error occurred in a function passed to `unstable_after()`:',
+              err
+            )
           }
-        } catch (err) {
-          onError(err)
-        }
-      }
-
-      this.keepAliveLock.release()
+        })
+      )
     }
 
     const readonlyRequestStore: RequestStore =
@@ -164,12 +128,10 @@ class AfterContext {
   }
 }
 
-function waitUntilNotAvailable() {
-  throw new Error('`waitUntil` is not implemented for the current environment.')
-}
-
-function onCloseNotAvailable() {
-  throw new Error('`onClose` is not implemented for the current environment.')
+function errorWaitUntilNotAvailable(): never {
+  throw new Error(
+    '`unstable_after()` will not work correctly, because `waitUntil` is not implemented for the current environment.'
+  )
 }
 
 /** Disable mutations of `requestStore` within `after()` and disallow nested after calls.  */
@@ -190,63 +152,18 @@ function wrapRequestStoreForAfterCallbacks(
     mutableCookies: new ResponseCookies(new Headers()),
     assetPrefix: requestStore.assetPrefix,
     reactLoadableManifest: requestStore.reactLoadableManifest,
+
     afterContext: {
       after: () => {
         throw new Error(
-          'Cannot call unstable_after() from within unstable_after()'
+          'Cannot call `unstable_after()` from within `unstable_after()`'
         )
       },
       run: () => {
         throw new Error(
-          'Cannot call run() from within an unstable_after() callback'
+          'Invariant: Cannot call `AfterContext.run()` from within an `unstable_after()` callback'
         )
       },
-    },
-  }
-}
-
-function createTrigger() {
-  let wasTriggered = false
-  const emitter = new EventTarget()
-
-  const onTrigger = (callback: () => void) =>
-    emitter.addEventListener('trigger', callback)
-
-  const trigger = () => {
-    emitter.dispatchEvent(new Event('trigger'))
-    wasTriggered = true
-  }
-  return {
-    get wasTriggered() {
-      return wasTriggered
-    },
-    onTrigger,
-    trigger,
-  }
-}
-
-type KeepAliveLock = ReturnType<typeof createKeepAliveLock>
-
-function createKeepAliveLock(waitUntil: WaitUntilFn) {
-  // callbacks can't go directly into waitUntil,
-  // and we don't want a function invocation to get stopped *before* we execute the callbacks,
-  // so block with a dummy promise that we'll resolve when we're done.
-  let keepAlivePromise: DetachedPromise<void> | undefined
-  return {
-    isLocked() {
-      return !!keepAlivePromise
-    },
-    acquire() {
-      if (!keepAlivePromise) {
-        keepAlivePromise = new DetachedPromise<void>()
-        waitUntil(keepAlivePromise.promise)
-      }
-    },
-    release() {
-      if (keepAlivePromise) {
-        keepAlivePromise.resolve(undefined)
-        keepAlivePromise = undefined
-      }
     },
   }
 }

@@ -197,7 +197,7 @@ function createAfterWrapper(
   })
 
   const wrap = <Result>(requestStore: RequestStore, callback: () => Result) =>
-    afterContext.run(requestStore, callback) as Result // TODO(after): check if non-promise cases can happen here
+    afterContext.run(requestStore, callback)
 
   return [wrap, afterContext]
 }
