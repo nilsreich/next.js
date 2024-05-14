@@ -343,9 +343,10 @@ You can apply local styles and components to specific pages by passing them into
 
 ```tsx filename="app/mdx-page/page.tsx" switcher
 import Welcome from '@/markdown/welcome.mdx'
+import { ComponentProps } from 'react'
 
-function CustomH1({ children }) {
-  return <h1 style={{ color: 'blue', fontSize: '100px' }}>{children}</h1>
+function CustomH1(props: ComponentProps<'h1'>) {
+    return <h1 style={{ color: 'blue', fontSize: '100px' }} {...props} />
 }
 
 const overrideComponents = {
